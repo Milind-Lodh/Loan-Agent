@@ -1,0 +1,131 @@
+const express = require('express');
+const http = require('http');
+const socketIo = require('socket.io');
+const cors = require('cors');
+const path = require('path');
+const mongoose = require('mongoose');
+require('dotenv').config();
+
+// Import routes
+const userRoutes = require('./backend/routes/userRoutes');
+const loanRoutes = require('./backend/routes/loanRoutes');
+
+// Import AI chat processor
+const chatProcessor = require('./backend/ai/chatProcessor');
+
+const app = express();
+const server = http.createServer(app);
+const io = socketIo(server, {
+  cors: {
+    origin: "*",
+    methods: ["GET", "POST"]
+  }
+});
+
+// Middleware
+app.use(cors());
+app.use(express.json());
+
+// Serve static files from frontend directory
+app.use(express.static(path.join(__dirname, 'frontend')));
+
+// Connect to MongoDB
+mongoose.connect(process.env.MONGODB_URI, {
+  useNewUrlParser: true,
+  useUnifiedTopology: true
+}).then(() => {
+  console.log('Connected to MongoDB');
+}).catch((error) => {
+  console.error('MongoDB connection error:', error);
+});
+
+// API Routes
+app.use('/api/users', userRoutes);
+app.use('/api/loans', loanRoutes);
+
+// Simple in-memory storage for demo purposes
+let users = [];
+let loans = [];
+
+// Routes
+app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, 'frontend', 'index.html'));
+});
+
+app.get('/api/health', (req, res) => {
+  res.json({ status: 'healthy', timestamp: new Date().toISOString() });
+});
+
+// Socket.io connection
+io.on('connection', (socket) => {
+  console.log('New client connected:', socket.id);
+  
+  // Handle user authentication
+  socket.on('authenticate', (data) => {
+    // In a real app, you would verify the user credentials
+    const user = users.find(u => u.id === data.userId);
+    if (user) {
+      socket.emit('authenticated', { success: true, user });
+    } else {
+      socket.emit('authenticated', { success: false, message: 'User not found' });
+    }
+  });
+  
+  // Handle loan application
+  socket.on('applyForLoan', (data) => {
+    const loan = {
+      id: Date.now().toString(),
+      userId: data.userId,
+      amount: data.amount,
+      term: data.term,
+      status: 'pending',
+      createdAt: new Date().toISOString()
+    };
+    
+    loans.push(loan);
+    socket.emit('loanApplicationStatus', { 
+      success: true, 
+      loanId: loan.id,
+      message: 'Loan application submitted successfully'
+    });
+    
+    // Simulate loan processing
+    setTimeout(() => {
+      // Update loan status (in a real app, this would be more complex)
+      const updatedLoan = loans.find(l => l.id === loan.id);
+      if (updatedLoan) {
+        updatedLoan.status = 'approved';
+        socket.emit('loanStatusUpdate', { 
+          loanId: loan.id,
+          status: 'approved',
+          message: 'Your loan has been approved!'
+        });
+      }
+    }, 5000);
+  });
+  
+  // Handle chat messages
+  socket.on('chatMessage', (data) => {
+    // Process the message with AI logic
+    const response = chatProcessor.processMessage(data.message);
+    socket.emit('chatResponse', { 
+      message: response,
+      timestamp: new Date().toISOString()
+    });
+  });
+  
+  socket.on('disconnect', () => {
+    console.log('Client disconnected:', socket.id);
+  });
+});
+
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => {
+  console.log(`Loan AgentiX server running on port ${PORT}`);
+});
+
+// Entry point for the Loan AgentiX application
+require('dotenv').config();
+
+// Start the main server
+require('./backend/server');
